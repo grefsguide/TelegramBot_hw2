@@ -1,10 +1,12 @@
-from aiogram import Router
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from aiogram import Router, types
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, FSInputFile
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from app import get_weather, get_food_info, try_get_food_info, get_workout_info, translate
+from app import get_weather, get_food_info, get_workout_info, translate
 from states import Form
 import logging
+import matplotlib.pyplot as plt
+
 
 
 router = Router()
@@ -20,6 +22,14 @@ buttons = InlineKeyboardMarkup(
                 [InlineKeyboardButton(text="Проверить прогресс", callback_data="check_progress")]
             ]
         )
+btns = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="Внести выпитую воду", callback_data="log_water")],
+                [InlineKeyboardButton(text="Внести съеденную еду", callback_data="log_food")],
+                [InlineKeyboardButton(text="Внести тренировку", callback_data="log_workout")],
+                [InlineKeyboardButton(text="Графики", callback_data="check_progress_graph")]
+            ])
+
 btnstrt = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Настроить профиль", callback_data="set_profile")]])
 
 sex_keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -43,13 +53,11 @@ async def process_set_profile(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text("Введите ваше имя:")
     await state.set_state(Form.name)
 
-
 @router.message(Form.name)
 async def set_name(message: Message, state: FSMContext):
     users[message.from_user.id] = {"name": message.text}
     await message.reply("Какой у вас пол?", reply_markup=sex_keyboard)
     await state.set_state(Form.sex)
-
 
 @router.callback_query(lambda c: c.data in ["sex_male", "sex_female"])
 async def set_sex(callback: CallbackQuery, state: FSMContext):
@@ -62,7 +70,6 @@ async def set_sex(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text("Введите ваш вес (в кг):")
     await state.set_state(Form.weight)
 
-
 @router.message(Form.weight)
 async def set_weight(message: Message, state: FSMContext):
     try:
@@ -72,7 +79,6 @@ async def set_weight(message: Message, state: FSMContext):
         await state.set_state(Form.height)
     except ValueError:
         await message.reply("Введите корректное число.")
-
 
 @router.message(Form.height)
 async def set_height(message: Message, state: FSMContext):
@@ -84,7 +90,6 @@ async def set_height(message: Message, state: FSMContext):
     except ValueError:
         await message.reply("Введите корректное значение.")
 
-
 @router.message(Form.age)
 async def set_age(message: Message, state: FSMContext):
     try:
@@ -95,7 +100,6 @@ async def set_age(message: Message, state: FSMContext):
     except ValueError:
         await message.reply("Введите корректное значение.")
 
-
 @router.message(Form.activity)
 async def set_activity(message: Message, state: FSMContext):
     try:
@@ -104,7 +108,7 @@ async def set_activity(message: Message, state: FSMContext):
         await message.reply("В каком городе вы находитесь?")
         await state.set_state(Form.city)
     except ValueError:
-        await message.reply("Введите корректное значение.")
+        await message.reply("Введите существующий город.")
 
 @router.message(Form.city)
 async def set_city(message: Message, state: FSMContext):
@@ -158,23 +162,23 @@ async def log_water(message: Message, state: FSMContext):
     user_id = message.from_user.id
     data = await state.get_data()
     current_amount = data.get('water_amount', 0)
-
     try:
-        # Парсим количество воды из сообщения
         amount = int(message.text)
 
-        # Обновляем количество воды (прибавляем введённое количество)
         new_amount = current_amount + amount
 
-        # Сохраняем новое значение воды в глобальном контексте FSM
         await state.update_data(water_amount=new_amount)
 
-        # Обновляем данные пользователя в словаре `users`
         if user_id not in users:
             users[user_id] = {"logged_water": 0, "logged_calories": 0, "water_goal": 2000, "calorie_goal": 2000}
 
+        water_goal = users[user_id].get("water_goal")
         users[user_id]["logged_water"] = new_amount
-        await message.answer(f"Вы выпили {amount} мл воды. Общее количество: {new_amount} мл.", reply_markup=buttons)
+        await message.answer(
+            f"Вы выпили {amount} мл воды.\n"
+            f"Общее количество: {new_amount} мл.\n"
+            f"Осталось выпить: {water_goal - new_amount}",
+            reply_markup=buttons)
         await state.clear()
     except ValueError:
         await message.answer("Пожалуйста, введите корректное количество воды.")
@@ -188,43 +192,103 @@ async def log_food(callback: CallbackQuery, state: FSMContext):
 @router.message(Form.food_calories)
 async def log_food_handler(message: Message, state: FSMContext):
     user_id = message.from_user.id
-    input_text = message.text
+    input_text = message.text.strip()
+    user_data = users.get(user_id, {})
+    calorie_goal = user_data.get("calorie_goal")
+    logged_calories = user_data.get("logged_calories", 0)
 
     try:
-        # Разделяем название продукта и количество
-        product_name, amount = input_text.rsplit(' ', 1)
+        *product_parts, amount = input_text.split()
+        product_name = " ".join(product_parts)
         amount = int(amount)
     except ValueError:
-        await message.answer("Пожалуйста, введите правильный формат: название продукта и количество в граммах.")
+        await message.answer(
+            "Пожалуйста, введите правильный формат: название продукта и количество в граммах, например: овсяная каша 200.")
         return
 
     try:
-        # Перевод названия продукта на английский
-        translated_food = await translate(product_name)
-        # Запрос калорий через отдельную функцию
-        total_calories = await try_get_food_info(translated_food, amount)
+        translated_food = translate(product_name, target_language='en')
+        total_calories = await get_food_info(translated_food, amount)
 
-        # Получение текущих данных и обновление калорий
-        data = await state.get_data()
-        current_calories = data.get('food_calories', 0)
-        new_calories = current_calories + total_calories
+        # Обновляем количество потребленных калорий
+        logged_calories += total_calories
+        users[user_id]["logged_calories"] = logged_calories
 
-        # Обновляем контекст и отправляем ответ
-        await state.update_data(food_calories=new_calories)
         await message.answer(
             f"Вы получили {total_calories:.2f} ккал из продукта: {product_name}.\n"
-            f"Общее количество калорий: {new_calories:.2f} ккал."
+            f"Общее количество полученных калорий: {logged_calories:.2f} ккал.\n"
+            f"Осталось: {calorie_goal - logged_calories:.2f} ккал.",
+            reply_markup=buttons
         )
         await state.clear()
-
     except Exception as e:
-        await message.answer("Ошибка при обработке запроса. Попробуйте позже.")
-        logging.error(f"Ошибка обработки: {e}")
+        await message.answer(f"Произошла ошибка: {e}")
+        logging.error(f"Ошибка при обработке: {e}")
+
 
 #Логирование сожженных калорий
 @router.callback_query(lambda c: c.data == "log_workout")
-async def log_workout(callback: CallbackQuery):
-    await callback.message.edit_text("Введите тип тренировки и её продолжительность в минутах, например: Бег 30")
+async def log_workout(callback: CallbackQuery, state: FSMContext):
+    await callback.message.edit_text("Введите название упражнения и его длительность в минутах, например: Бег 30")
+    await state.set_state(Form.burned_calories)
+
+@router.message(Form.burned_calories)
+async def log_burned_calories(message: Message, state: FSMContext):
+    user_id = message.from_user.id
+    input_text = message.text.strip()
+
+    try:
+        # Разделяем строку на все части, предполагая, что последнее слово — это время
+        parts = input_text.rsplit(' ', 1)
+        if len(parts) != 2:
+            raise ValueError("Неверный формат ввода. Пример: Бег 30")
+
+        exercise_name, duration = parts
+        duration = int(duration)  # Преобразуем длительность в число минут
+        user_weight = users[user_id]['weight']
+    except ValueError as e:
+        await message.answer(
+            "Пожалуйста, введите правильный формат: название упражнения и её длительность в минутах, например: Бег 30.")
+        return
+
+    try:
+        # Перевод названия упражнения на английский
+        translated_exercise = translate(exercise_name, target_language='en')
+
+        # Запрос к Nutritionix API для получения сожженных калорий
+        burned_calories = await get_workout_info(translated_exercise, duration, user_weight)
+
+        # Получение текущих данных и обновление сожженных калорий
+        current_burned_calories = users[user_id].get("burned_calories", 0)
+        new_burned_calories = current_burned_calories + burned_calories
+
+        # Сохраняем данные в FSMContext
+        await state.update_data(burned_calories=new_burned_calories)
+
+        # Обновляем данные пользователя в глобальном словаре `users`
+        if user_id not in users:
+            users[user_id] = {"logged_water": 0, "logged_calories": 0, "burned_calories": 0, "water_goal": 2000,
+                              "calorie_goal": 2000}
+
+        users[user_id]["burned_calories"] = new_burned_calories
+        total_workout_time = users[user_id].get("workout", 0) + duration
+        users[user_id]["workout"] = total_workout_time
+        additional_water = (total_workout_time // 20) * 200
+        users[user_id]["water_goal"] += additional_water
+
+        # Отправляем пользователю результат
+        await message.answer(
+            f"Вы сожгли {burned_calories:.2f} ккал за {duration} минут упражнения: {exercise_name}.\n"
+            f"Общее количество сожженных калорий: {new_burned_calories:.2f} ккал.\n"
+            f"Дополнительно рекомендуется выпить {additional_water} мл воды.\n"
+            f"Общее время тренировок: {total_workout_time} минут.",
+            reply_markup=buttons
+        )
+        await state.clear()
+    except Exception as e:
+        logging.error(f"Ошибка обработки: {e}")
+        await message.answer("Произошла ошибка при обработке данных. Попробуйте ещё раз.")
+
 
 @router.callback_query(lambda c: c.data == "check_progress")
 async def check_progress(callback: CallbackQuery):
@@ -237,12 +301,55 @@ async def check_progress(callback: CallbackQuery):
     calorie_goal = user.get("calorie_goal", 0)
     logged_water = user.get("logged_water", 0)
     logged_calories = user.get("logged_calories", 0)
-    burning_calories = user.get("burning_calories", 0)
+    burned_calories = user.get("burned_calories", 0)
 
     await callback.message.edit_text(
         f"Ваш прогресс:\n"
-        f"Выпито воды: {logged_water}/{water_goal} мл\n"
-        f"Потреблено калорий: {logged_calories}/{calorie_goal} ккал",
-        f"Сожжено калорий: {burning_calories} ккал",
-        reply_markup = buttons
+        f"Вода:\n"
+        f"- Выпито воды: {logged_water}/{water_goal} мл\n"
+        f"- Осталось: {water_goal - logged_water}мл\n"
+        f"\nКалории:\n"
+        f"- Потреблено калорий: {logged_calories:.1f}/{calorie_goal:.1f} ккал\n" 
+        f"- Сожжено калорий: {burned_calories:.1f} ккал\n"
+        f"- Баланс: {logged_calories - burned_calories:.1f}",
+        reply_markup=btns
     )
+
+# Функция для построения графиков
+@router.callback_query(lambda c: c.data == "check_progress_graph")
+async def check_progress_graph(callback: types.CallbackQuery):
+    user = users.get(callback.from_user.id)
+    if not user:
+        await callback.message.edit_text("Сначала настройте профиль с помощью 'Настроить профиль'.", reply_markup=btnstrt)
+        return
+
+    water_goal = user.get("water_goal", 0)
+    logged_water = user.get("logged_water", 0)
+    calorie_goal = user.get("calorie_goal", 0)
+    logged_calories = user.get("logged_calories", 0)
+
+    fig, axs = plt.subplots(1, 2, figsize=(10, 5))
+
+    axs[0].bar(['Выпито воды'], [logged_water], color='blue', label='Выпито')
+    axs[0].bar(['Норма воды'], [water_goal], color='gray', alpha=0.5, label='Норма')
+    axs[0].set_title('Прогресс по воде')
+    axs[0].legend()
+
+    axs[1].bar(['Потреблено'], [logged_calories], color='green', label='Потреблено')
+    axs[1].bar(['Норма калорий'], [calorie_goal], color='gray', alpha=0.5, label='Норма')
+    axs[1].set_title('Прогресс по калориям')
+    axs[1].legend()
+
+    file_path = "progress_graph.png"
+    plt.tight_layout()
+    plt.savefig(file_path, format="png")
+
+    photo = FSInputFile(file_path)
+    await callback.message.answer_photo(photo=photo, caption="Ваш прогресс по воде и калориям.")
+
+    plt.close(fig)
+
+    # Отправляем кнопки после графика
+    await callback.message.answer("Выберите действие:", reply_markup=buttons)
+
+    plt.close(fig)
