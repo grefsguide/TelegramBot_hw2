@@ -15,3 +15,5 @@ class Form(StatesGroup):
     logget_water = State()
     logged_calories = State()
     food_calories = State()
+    calorie_choice = State()
+    custom_calorie = State()

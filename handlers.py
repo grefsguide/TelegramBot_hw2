@@ -1,5 +1,5 @@
 from aiogram import Router, types
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, FSInputFile
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, FSInputFile, KeyboardButton, ReplyKeyboardMarkup
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from app import get_weather, get_food_info, get_workout_info, translate
@@ -36,6 +36,15 @@ sex_keyboard = InlineKeyboardMarkup(inline_keyboard=[
     [InlineKeyboardButton(text="Мужчина", callback_data="sex_male")],
     [InlineKeyboardButton(text="Женщина", callback_data="sex_female")]
     ]
+)
+
+calorie_keyboard = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="Рассчитать автоматически")],
+        [KeyboardButton(text="Ввести вручную")],
+    ],
+    resize_keyboard=True,
+    one_time_keyboard=True
 )
 
 @router.message(Command('start'))
@@ -118,39 +127,79 @@ async def set_city(message: Message, state: FSMContext):
         temperature = weather_data['main']['temp']
 
         user = users[message.from_user.id]
-        weight = user["weight"]
-        height = user["height"]
-        age = user["age"]
-        activity = user["activity"]
-        sex = user["sex"]
+        user["city"] = city
+        user["temperature"] = temperature
 
+        # Рассчитать норму воды
+        weight = user["weight"]
+        activity = user["activity"]
         water_goal = weight * 30 + (500 * (activity // 30))
         if temperature > 25:
             water_goal += 500
+        user["water_goal"] = water_goal
+
+        await message.reply(
+            "Как вы хотите установить норму калорий?\n"
+            "Вы можете рассчитать автоматически на основе ваших данных или ввести её вручную.",
+            reply_markup=calorie_keyboard
+        )
+        await state.set_state(Form.calorie_choice)
+    except Exception as e:
+        await message.reply(f"Ошибка при получении данных о погоде: {e}")
+
+@router.message(Form.calorie_choice)
+async def set_calorie_choice(message: Message, state: FSMContext):
+    choice = message.text.lower()
+    user = users[message.from_user.id]
+
+    if "автоматически" in choice:
+        weight = user["weight"]
+        height = user["height"]
+        age = user["age"]
+        sex = user["sex"]
+
+        # Расчет калорий
         if sex == 1:
             calorie_goal = round(88.36 + (weight * 13.4) + (height * 5) - (age * 5.7), 1)
         else:
             calorie_goal = round(447.6 + (weight * 9.2) + (height * 3.1) - (age * 4.3), 1)
+        user["calorie_goal"] = calorie_goal
 
-        user.update({
-            "city": city,
-            "water_goal": water_goal,
-            "calorie_goal": calorie_goal,
-            "logged_water": 0,
-            "logged_calories": 0,
-            "burned_calories": 0
-        })
-
-        await message.reply(
-            f"Профиль настроен!\n"
-            f"Текущая температура в {city}: {temperature}°C\n"
-            f"Норма воды: {water_goal} мл\n"
-            f"Норма калорий: {calorie_goal} ккал.",
-            reply_markup=buttons
-        )
+        await send_profile_summary(message, user)
         await state.clear()
-    except Exception as e:
-        await message.reply(f"Ошибка при получении данных о погоде: {e}")
+
+    elif "ввести вручную" in choice:
+        await message.reply("Введите вашу норму калорий (в ккал):")
+        await state.set_state(Form.custom_calorie)
+
+    else:
+        await message.reply("Пожалуйста, выберите один из доступных вариантов.")
+
+@router.message(Form.custom_calorie)
+async def set_custom_calorie(message: Message, state: FSMContext):
+    try:
+        calorie_goal = float(message.text)
+        users[message.from_user.id]["calorie_goal"] = calorie_goal
+
+        await send_profile_summary(message, users[message.from_user.id])
+        await state.clear()
+    except ValueError:
+        await message.reply("Введите корректное число.")
+
+async def send_profile_summary(message: Message, user: dict):
+    city = user["city"]
+    temperature = user["temperature"]
+    water_goal = user["water_goal"]
+    calorie_goal = user["calorie_goal"]
+
+    await message.reply(
+        f"Профиль настроен!\n"
+        f"Город: {city}\n"
+        f"Температура: {temperature}°C\n"
+        f"Норма воды: {water_goal} мл\n"
+        f"Норма калорий: {calorie_goal} ккал.",
+        reply_markup=buttons
+    )
 # Логирование выпитой воды
 @router.callback_query(lambda c: c.data == "log_water")
 async def log_water(callback: CallbackQuery, state: FSMContext):
