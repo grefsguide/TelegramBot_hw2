@@ -14,6 +14,7 @@ router = Router()
 # Хранилище данных пользователей
 users = {}
 
+# Кнопки
 buttons = InlineKeyboardMarkup(
             inline_keyboard=[
                 [InlineKeyboardButton(text="Внести выпитую воду", callback_data="log_water")],
@@ -46,7 +47,7 @@ calorie_keyboard = ReplyKeyboardMarkup(
     resize_keyboard=True,
     one_time_keyboard=True
 )
-
+# Начало работы и ввод данных
 @router.message(Command('start'))
 async def cmd_start(message: Message):
     button = InlineKeyboardMarkup(
@@ -221,7 +222,6 @@ async def log_water(message: Message, state: FSMContext):
                 "calorie_goal": 2000,
             }
 
-        # Убедимся, что ключ 'logged_water' существует
         if "logged_water" not in users[user_id]:
             users[user_id]["logged_water"] = 0
 
@@ -301,7 +301,7 @@ async def log_burned_calories(message: Message, state: FSMContext):
             raise ValueError("Неверный формат ввода. Пример: Бег 30")
 
         exercise_name, duration = parts
-        duration = int(duration)  # Преобразуем длительность в число минут
+        duration = int(duration)
         user_weight = users[user_id]['weight']
     except ValueError as e:
         await message.answer(
@@ -319,10 +319,8 @@ async def log_burned_calories(message: Message, state: FSMContext):
         current_burned_calories = users[user_id].get("burned_calories", 0)
         new_burned_calories = current_burned_calories + burned_calories
 
-        # Сохраняем данные в FSMContext
         await state.update_data(burned_calories=new_burned_calories)
 
-        # Обновляем данные пользователя в глобальном словаре `users`
         if user_id not in users:
             users[user_id] = {"logged_water": 0, "logged_calories": 0, "burned_calories": 0, "water_goal": 2000,
                               "calorie_goal": 2000}
@@ -333,7 +331,6 @@ async def log_burned_calories(message: Message, state: FSMContext):
         additional_water = (total_workout_time // 20) * 200
         users[user_id]["water_goal"] += additional_water
 
-        # Отправляем пользователю результат
         await message.answer(
             f"Вы сожгли {burned_calories:.2f} ккал за {duration} минут упражнения: {exercise_name}.\n"
             f"Общее количество сожженных калорий: {new_burned_calories:.2f} ккал.\n"
@@ -406,7 +403,6 @@ async def check_progress_graph(callback: types.CallbackQuery):
 
     plt.close(fig)
 
-    # Отправляем кнопки после графика
     await callback.message.answer("Выберите действие:", reply_markup=buttons)
 
     plt.close(fig)
