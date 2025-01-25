@@ -203,31 +203,39 @@ async def send_profile_summary(message: Message, user: dict):
 # Логирование выпитой воды
 @router.callback_query(lambda c: c.data == "log_water")
 async def log_water(callback: CallbackQuery, state: FSMContext):
-    await state.set_state(Form.logget_water)
+    await state.set_state(Form.logged_water)
     await callback.message.edit_text("Введите количество воды (в мл), которую вы выпили:")
 
-@router.message(Form.logget_water)
+@router.message(Form.logged_water)
 async def log_water(message: Message, state: FSMContext):
     user_id = message.from_user.id
-    data = await state.get_data()
-    current_amount = data.get('water_amount', 0)
     try:
         amount = int(message.text)
 
-        new_amount = current_amount + amount
-
-        await state.update_data(water_amount=new_amount)
-
+        # Инициализируем профиль пользователя, если он отсутствует
         if user_id not in users:
-            users[user_id] = {"logged_water": 0, "logged_calories": 0, "water_goal": 2000, "calorie_goal": 2000}
+            users[user_id] = {
+                "logged_water": 0,
+                "logged_calories": 0,
+                "water_goal": 2000,
+                "calorie_goal": 2000,
+            }
 
-        water_goal = users[user_id].get("water_goal")
-        users[user_id]["logged_water"] = new_amount
+        # Убедимся, что ключ 'logged_water' существует
+        if "logged_water" not in users[user_id]:
+            users[user_id]["logged_water"] = 0
+
+        # Обновляем количество выпитой воды
+        users[user_id]["logged_water"] += amount
+        logged_water = users[user_id]["logged_water"]
+        water_goal = users[user_id]["water_goal"]
+
         await message.answer(
             f"Вы выпили {amount} мл воды.\n"
-            f"Общее количество: {new_amount} мл.\n"
-            f"Осталось выпить: {water_goal - new_amount}",
-            reply_markup=buttons)
+            f"Общее количество: {logged_water} мл.\n"
+            f"Осталось выпить: {max(0, water_goal - logged_water)} мл.",
+            reply_markup=buttons
+        )
         await state.clear()
     except ValueError:
         await message.answer("Пожалуйста, введите корректное количество воды.")

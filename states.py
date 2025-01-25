@@ -12,7 +12,7 @@ class Form(StatesGroup):
     calorie_goal = State()
     workout = State()
     burned_calories = State()
-    logget_water = State()
+    logged_water = State()
     logged_calories = State()
     food_calories = State()
     calorie_choice = State()
